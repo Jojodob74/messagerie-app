@@ -15,11 +15,8 @@ export default function Chat({ session }) {
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    fetchConversation()
-    fetchMessages()
-    markAsRead()
+    fetchAll()
 
-    // Abonnement temps réel
     const channel = supabase
       .channel(`messages:${id}`)
       .on('postgres_changes', {
@@ -40,7 +37,10 @@ export default function Chat({ session }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function fetchConversation() {
+  async function fetchAll() {
+    setLoading(true)
+
+    // 1. Récupérer la conversation
     const { data: conv } = await supabase
       .from('conversations')
       .select('*')
@@ -48,22 +48,31 @@ export default function Chat({ session }) {
       .single()
     setConversation(conv)
 
-    const { data: m } = await supabase
+    // 2. Récupérer les membres avec leurs profils séparément
+    const { data: memberRows } = await supabase
       .from('conversation_members')
-      .select('user_id, profiles(username)')
+      .select('user_id')
       .eq('conversation_id', id)
-    setMembers(m || [])
-  }
 
-  async function fetchMessages() {
-    setLoading(true)
-    const { data } = await supabase
+    if (memberRows && memberRows.length > 0) {
+      const userIds = memberRows.map(m => m.user_id)
+      const { data: profileRows } = await supabase
+        .from('profiles')
+        .select('id, username')
+        .in('id', userIds)
+      setMembers(profileRows || [])
+    }
+
+    // 3. Récupérer les messages
+    const { data: msgs } = await supabase
       .from('messages')
       .select('*')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true })
-    setMessages(data || [])
+    setMessages(msgs || [])
+
     setLoading(false)
+    markAsRead()
   }
 
   async function markAsRead() {
@@ -116,9 +125,9 @@ export default function Chat({ session }) {
 
   function getConvName() {
     if (!conversation) return ''
-    if (conversation.is_group) return conversation.name
-    const other = members.find(m => m.user_id !== session.user.id)
-    return other?.profiles?.username || 'Inconnu'
+    if (conversation.is_group) return conversation.name || 'Groupe'
+    const other = members.find(m => m.id !== session.user.id)
+    return other?.username || 'Inconnu'
   }
 
   function getInitial(name) {
@@ -126,8 +135,8 @@ export default function Chat({ session }) {
   }
 
   function getSenderName(senderId) {
-    const m = members.find(m => m.user_id === senderId)
-    return m?.profiles?.username || 'Inconnu'
+    const m = members.find(m => m.id === senderId)
+    return m?.username || 'Inconnu'
   }
 
   function formatTime(dateStr) {
@@ -137,7 +146,9 @@ export default function Chat({ session }) {
   function groupByDate(msgs) {
     const groups = {}
     msgs.forEach(msg => {
-      const d = new Date(msg.created_at).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
+      const d = new Date(msg.created_at).toLocaleDateString('fr-FR', {
+        weekday: 'long', day: 'numeric', month: 'long'
+      })
       if (!groups[d]) groups[d] = []
       groups[d].push(msg)
     })
@@ -149,7 +160,6 @@ export default function Chat({ session }) {
 
   return (
     <div className="chat-container">
-      {/* Header */}
       <div className="chat-header">
         <button className="back-btn" onClick={() => navigate('/')}>‹</button>
         <div className="chat-avatar">{getInitial(getConvName())}</div>
@@ -159,7 +169,6 @@ export default function Chat({ session }) {
         </div>
       </div>
 
-      {/* Messages */}
       <div className="messages-container">
         {loading ? (
           <div className="empty-state"><div className="spinner" /></div>
@@ -181,7 +190,8 @@ export default function Chat({ session }) {
                     {showName && <span className="sender-name">{getSenderName(msg.sender_id)}</span>}
                     <div className={`bubble ${isMe ? 'bubble-me' : 'bubble-them'}`}>
                       {msg.image_url ? (
-                        <img src={msg.image_url} alt="photo" className="msg-image" onClick={() => window.open(msg.image_url)} />
+                        <img src={msg.image_url} alt="photo" className="msg-image"
+                          onClick={() => window.open(msg.image_url)} />
                       ) : (
                         <span>{msg.content}</span>
                       )}
@@ -196,9 +206,9 @@ export default function Chat({ session }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
       <form className="chat-input-bar" onSubmit={sendMessage}>
-        <button type="button" className="attach-btn" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+        <button type="button" className="attach-btn"
+          onClick={() => fileInputRef.current?.click()} disabled={uploading}>
           {uploading ? '⏳' : '📷'}
         </button>
         <input
@@ -215,9 +225,7 @@ export default function Chat({ session }) {
           value={text}
           onChange={e => setText(e.target.value)}
         />
-        <button type="submit" className="send-btn" disabled={!text.trim()}>
-          ↑
-        </button>
+        <button type="submit" className="send-btn" disabled={!text.trim()}>↑</button>
       </form>
     </div>
   )

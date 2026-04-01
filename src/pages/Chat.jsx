@@ -89,13 +89,15 @@ export default function Chat({ session }) {
     if (!text.trim()) return
     const content = text.trim()
     setText('')
-    await supabase.from('messages').insert({
+    const { data: newMsg } = await supabase.from('messages').insert({
       conversation_id: id,
       sender_id: session.user.id,
       content,
-    })
+    }).select().single()
+    if (newMsg) {
+      setMessages(prev => [...prev, newMsg])
+    }
   }
-
   async function sendImage(e) {
     const file = e.target.files[0]
     if (!file) return

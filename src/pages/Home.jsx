@@ -5,7 +5,6 @@ import { supabase } from '../lib/supabase'
 export default function Home({ session }) {
   const [conversations, setConversations] = useState([])
   const [profiles, setProfiles] = useState([])
-  const [myProfile, setMyProfile] = useState(null)
   const [showNewChat, setShowNewChat] = useState(false)
   const [showNewGroup, setShowNewGroup] = useState(false)
   const [groupName, setGroupName] = useState('')
@@ -14,19 +13,9 @@ export default function Home({ session }) {
   const navigate = useNavigate()
 
   useEffect(() => {
-    fetchMyProfile()
     fetchConversations()
     fetchProfiles()
   }, [])
-
-  async function fetchMyProfile() {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', session.user.id)
-      .single()
-    setMyProfile(data)
-  }
 
   async function fetchProfiles() {
     const { data } = await supabase
@@ -38,28 +27,27 @@ export default function Home({ session }) {
 
   async function fetchConversations() {
     setLoading(true)
-    // Récupérer les conversations où je suis membre
-    const { data: memberData } = await supabase
+
+    const { data: memberRows } = await supabase
       .from('conversation_members')
       .select('conversation_id')
       .eq('user_id', session.user.id)
 
-    if (!memberData || memberData.length === 0) {
+    if (!memberRows || memberRows.length === 0) {
       setConversations([])
       setLoading(false)
       return
     }
 
-    const convIds = memberData.map(m => m.conversation_id)
+    const convIds = memberRows.map(m => m.conversation_id)
 
-    const { data: convData } = await supabase
+    const { data: convRows } = await supabase
       .from('conversations')
       .select('*')
       .in('id', convIds)
       .order('created_at', { ascending: false })
 
-    // Pour chaque conversation, récupérer les membres et le dernier message
-    const enriched = await Promise.all((convData || []).map(async (conv) => {
+    const enriched = await Promise.all((convRows || []).map(async (conv) => {
       const { data: members } = await supabase
         .from('conversation_members')
         .select('user_id, profiles(username)')
@@ -72,7 +60,6 @@ export default function Home({ session }) {
         .order('created_at', { ascending: false })
         .limit(1)
 
-      // Unread count
       const { count } = await supabase
         .from('messages')
         .select('*', { count: 'exact', head: true })
@@ -80,7 +67,12 @@ export default function Home({ session }) {
         .eq('is_read', false)
         .neq('sender_id', session.user.id)
 
-      return { ...conv, members: members || [], lastMessage: lastMsg?.[0] || null, unreadCount: count || 0 }
+      return {
+        ...conv,
+        members: members || [],
+        lastMessage: lastMsg?.[0] || null,
+        unreadCount: count || 0
+      }
     }))
 
     setConversations(enriched)
@@ -88,42 +80,19 @@ export default function Home({ session }) {
   }
 
   async function startPrivateChat(userId) {
-    // Vérifier si une conversation privée existe déjà
-    const { data: myConvs } = await supabase
-      .from('conversation_members')
-      .select('conversation_id')
-      .eq('user_id', session.user.id)
+    setShowNewChat(false)
 
-    const { data: theirConvs } = await supabase
-      .from('conversation_members')
-      .select('conversation_id')
-      .eq('user_id', userId)
-
-    const myIds = myConvs?.map(c => c.conversation_id) || []
-    const theirIds = theirConvs?.map(c => c.conversation_id) || []
-    const common = myIds.filter(id => theirIds.includes(id))
-
-    if (common.length > 0) {
-      // Vérifier que c'est bien une conversation privée (pas un groupe)
-      const { data: conv } = await supabase
-        .from('conversations')
-        .select('*')
-        .in('id', common)
-        .eq('is_group', false)
-        .single()
-      if (conv) {
-        navigate(`/chat/${conv.id}`)
-        setShowNewChat(false)
-        return
-      }
-    }
-
-    // Créer une nouvelle conversation
-    const { data: newConv } = await supabase
+    // Créer directement une nouvelle conversation sans vérifier si elle existe
+    const { data: newConv, error } = await supabase
       .from('conversations')
       .insert({ is_group: false, created_by: session.user.id })
       .select()
       .single()
+
+    if (error || !newConv) {
+      alert('Erreur lors de la création de la conversation')
+      return
+    }
 
     await supabase.from('conversation_members').insert([
       { conversation_id: newConv.id, user_id: session.user.id },
@@ -131,17 +100,21 @@ export default function Home({ session }) {
     ])
 
     navigate(`/chat/${newConv.id}`)
-    setShowNewChat(false)
   }
 
   async function createGroup() {
     if (!groupName.trim() || selectedUsers.length === 0) return
 
-    const { data: newConv } = await supabase
+    const { data: newConv, error } = await supabase
       .from('conversations')
       .insert({ name: groupName, is_group: true, created_by: session.user.id })
       .select()
       .single()
+
+    if (error || !newConv) {
+      alert('Erreur lors de la création du groupe')
+      return
+    }
 
     const members = [
       { conversation_id: newConv.id, user_id: session.user.id },
@@ -177,7 +150,6 @@ export default function Home({ session }) {
 
   return (
     <div className="home-container">
-      {/* Header */}
       <div className="home-header">
         <h1>Messages</h1>
         <div className="header-actions">
@@ -187,7 +159,6 @@ export default function Home({ session }) {
         </div>
       </div>
 
-      {/* Liste des conversations */}
       <div className="conv-list">
         {loading ? (
           <div className="empty-state"><div className="spinner" /></div>
@@ -217,7 +188,6 @@ export default function Home({ session }) {
         )}
       </div>
 
-      {/* Modal nouveau chat */}
       {showNewChat && (
         <div className="modal-overlay" onClick={() => setShowNewChat(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -239,7 +209,6 @@ export default function Home({ session }) {
         </div>
       )}
 
-      {/* Modal nouveau groupe */}
       {showNewGroup && (
         <div className="modal-overlay" onClick={() => setShowNewGroup(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -256,7 +225,8 @@ export default function Home({ session }) {
             <p className="modal-label">Membres :</p>
             <div className="modal-list">
               {profiles.map(p => (
-                <div key={p.id} className={`modal-item ${selectedUsers.includes(p.id) ? 'selected' : ''}`}
+                <div key={p.id}
+                  className={`modal-item ${selectedUsers.includes(p.id) ? 'selected' : ''}`}
                   onClick={() => setSelectedUsers(prev =>
                     prev.includes(p.id) ? prev.filter(id => id !== p.id) : [...prev, p.id]
                   )}>
